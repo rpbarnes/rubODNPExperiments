@@ -1,0 +1,71 @@
+//{{{declarations
+char newfilename[1000];
+char filetopullfrom[1000];
+void newexp(char *,char *,int);
+int want_to_copy;
+//}}}
+GETCURDATA // this gets the FOREGROUND dataset
+want_to_copy = 1;
+sprintf(newfilename,"replace with new exp name");
+if(Proc_err(QUESTION_OPT,"Before running this program, be sure that you are %s --> if you are not, open one of your own experiments!",user) != ERR_OK)
+{
+   ABORT
+}
+GETSTRING("Enter the name of the experiment you want to create",newfilename)
+if(Proc_err(QUESTION_OPT,"Do you want to copy the DNP parameters from an existing experiment?") != ERR_OK)
+{
+    want_to_copy = 0;
+}
+sprintf(filetopullfrom,"%s",name);
+//sprintf(filetopullfrom,"replace with exp that has similar parameters");
+GETSTRING("Enter the name of the experiment you want to pull your starting parameters from",filetopullfrom)
+newexp(newfilename,filetopullfrom,want_to_copy);
+//GETCURDATA
+XCMD("sendgui close") //do this at the same time to close the open windows, so people don't accidentally overwrite data
+QUIT
+//{{{ various functions
+void newexp(char *newexpname,char *exponefrom,int want_to_copy)
+{
+	char thisstring[1000];
+	int iterexp;
+	FILE *titlefp;			/* title file pointer */
+	printf("entered newexp");
+	//the following lines are unnecessary and possibly troublesome
+	//(void) sprintf( thisstring,"C:/Bruker/Topspin3.2/GNU/bin/cp.exe -R %s/data/%s/nmr/template %s/data/%s/nmr/%s",
+	//	disk, user, disk, user, newexpname);
+	//system(thisstring);
+	//printf("copied template with:\n%s\n",thisstring);
+	// rather than the stuff above that's commented out, do this
+	(void) sprintf( thisstring,"C:/Bruker/Topspin3.2/GNU/bin/mkdir.exe %s/%s",
+		disk, newexpname);
+	system(thisstring);
+	if(want_to_copy > 0)
+	{
+		for(iterexp=0;iterexp<5;iterexp++)
+		{
+			(void) sprintf( thisstring,"C:/Bruker/Topspin3.2/GNU/bin/rm.exe -R %s/%s/%d", disk, newexpname, iterexp+1);
+			system(thisstring);
+			printf("removed old stuff with:\n%s\n",thisstring);
+			(void) sprintf( thisstring,"C:/Bruker/Topspin3.2/GNU/bin/cp.exe -R %s/%s/%d %s/%s/%d", disk, exponefrom, iterexp+1,
+				disk, newexpname, iterexp+1);
+			system(thisstring);
+			printf("moved new stuff with:\n%s\n",thisstring);
+			(void) sprintf( thisstring,"C:/Bruker/Topspin3.2/GNU/bin/rm.exe %s/%s/%d/fid", disk, newexpname, iterexp+1);
+			system(thisstring);
+			printf("deleted raw data with:\n%s\n",thisstring);
+			(void) sprintf( thisstring,"C:/Bruker/Topspin3.2/GNU/bin/rm.exe %s/%s/%d/ser", disk, newexpname, iterexp+1);
+			system(thisstring);
+			printf("deleted raw data with:\n%s\n",thisstring);
+			
+		}
+	}
+}
+#include <inc/exptUtil>/* utilities for printing and calculation of 
+		      experiment time */
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <shellapi.h>
+//#include <time.h>
+
+//}}}

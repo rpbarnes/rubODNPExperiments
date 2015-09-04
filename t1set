@@ -1,0 +1,300 @@
+//{{{declarations
+double attenuation_setting, attenuation_setting_start, attenuation_setting_stop, negativeone, high_power, low_power, redo_powers[3];
+double sfo1, freqoffby;
+char userstring[10][20];
+double userdata[20];
+char teststring[20];
+float p1,pl1,rg,rglowp;
+void make_vdlist(char *,double,double,int,float,float);
+void make_vdlistlog(char *,double,double,int,float,float,double *);
+void settitle(char *);
+void make_plist(double,double,int,double *);
+double round(double);
+double yig_frequency,attenlist[256];
+float emaxscantime,t1scantime,initialt1time;
+double tempd;
+float tempf,startconstant,stopconstant;
+int number_experiments;
+int j,eno;
+int sleeptime,t1expno,newexpno;
+int counter;
+int fir;
+int myexpno, attenspaces;
+int t1steps,npcyc,t1sepcycle;
+double Ta,Tb;
+double delaylist[256];
+char *status_string;
+char mytext[100];
+double myratio,elratio;
+//}}}
+//{{{defaults and constants
+negativeone = (double) -1.0;
+fir = 0;
+//}}}
+//{{{ grab sfo1, and p1 from first parameters in the set, and transfer to the rest
+REXPNO(1)
+RPROCNO(1)
+SETCURDATA
+FETCHPAR("SFO1",&sfo1);
+FETCHPAR("P1",&p1);
+FETCHPAR("PLW1",&pl1); // Bruker changed what they call this. The power is also now given in watts, which is nice.
+FETCHPAR("USERA1",userstring[1]);
+yig_frequency = (double) atof(userstring[1]);
+FETCHPAR("USERA2",userstring[2]);
+myratio = (double) atof(userstring[2]);
+//}}}
+//{{{ set up the T1 parameters -- in an ideal situation, this would let us use the parameters of Weiss et. al. -- see first paper and table in second paper
+//{{{ get a bunch of t1 related parameters
+FETCHPAR("CNST 15",&tempf);
+Ta = (double) tempf;
+GETFLOAT("Enter the minimum possible T_1 value:",Ta);
+tempf = (float) Ta;
+STOREPAR("CNST 15",tempf);
+
+FETCHPAR("CNST 16",&tempf);
+Tb = (double) tempf;
+GETFLOAT("Enter the maximum possible T_1 value:",Tb);
+tempf = (float) Tb;
+STOREPAR("CNST 16",tempf);
+
+FETCHPAR("CNST 17",&tempf);
+t1steps = (int) tempf;
+GETINT("Enter the number of steps for your T_1 experiment:",t1steps);
+tempf = (float) t1steps;
+STOREPAR("CNST 17",tempf);
+
+FETCHPAR("CNST 22",&tempf);
+number_experiments = (int) tempf;
+GETINT("Enter the number of T_1 experiments you want to run:",number_experiments);
+tempf = (float) number_experiments;
+STOREPAR("CNST 22",tempf);
+
+FETCHPAR("CNST 11",&tempf);
+npcyc = (int) tempf;
+
+FETCHPAR("CNST 13",&startconstant);
+
+FETCHPAR("CNST 14",&stopconstant);
+
+FETCHPAR("CNST 20",&tempf);
+t1expno = (int) tempf;
+GETINT("Pull T_1 parameters from experiment",t1expno);
+tempf = (float) t1expno;
+STOREPAR("CNST 20",tempf);
+
+FETCHPAR("CNST 12",&tempf);
+t1sepcycle = (int) tempf;
+
+FETCHPAR("CNST 21",&tempf);
+newexpno = (int) tempf;
+GETINT("Put new data starting at experiment",newexpno);
+tempf = (float) newexpno;
+STOREPAR("CNST 21",tempf);
+//}}}
+//{{{ generate the experiment that I specified
+REXPNO(t1expno)
+RPROCNO(1)
+SETCURDATA
+WRA(newexpno)
+REXPNO(newexpno)
+RPROCNO(1)
+SETCURDATA
+STOREPAR("SFO1",sfo1)
+STOREPAR("P1",p1)
+STOREPAR("PLW1",pl1)
+//}}}
+//{{{override various T1 parameters based on the values I have chosen
+make_vdlistlog("jf_fir_tmp",Ta,Tb,t1steps,startconstant,stopconstant,delaylist); //Use log spacing for delay list
+if(t1sepcycle)
+{
+    STOREPAR("PULPROG","jf_fir_ph") // hard set this
+}else{
+    STOREPAR("PULPROG","jf_fir") // hard set this
+}
+STOREPAR("VDLIST","jf_fir_tmp") // hard set this
+STOREPAR("NS",1)
+if(fir)
+{
+    STOREPAR("D 1",Tb*2.0) // optimal according to Weiss
+}else{
+    STOREPAR("D 1",Tb*5.0) // this is for T1-IR
+}
+if(t1sepcycle)
+{
+    STOREPAR1("TD",t1steps*npcyc)
+    STOREPAR("L 22",t1steps)
+    STOREPAR("L 21",npcyc)
+}else{
+    STOREPAR1("TD",t1steps)
+    STOREPAR("NS",npcyc)
+}
+//}}}
+//{{{ calculate the T1 scan time, and check that it's good
+REXPNO(newexpno)
+RPROCNO(1)
+SETCURDATA
+initialt1time = (float) CalcExpTime();
+t1scantime = initialt1time;
+if(Proc_err(QUESTION_OPT,"The T_1 experiment will take %0.1f min. For a total experiment time of %0.1f",initialt1time/60.0,initialt1time/60.0*number_experiments) != ERR_OK)
+{
+	ABORT
+}
+status_string = calloc(500,sizeof(char));
+for(j=0;j<t1steps;j++)
+{
+        sprintf(status_string,"%s %0.4f",status_string,delaylist[j]); // this is a fancy way to do append
+}
+
+if(Proc_err(QUESTION_OPT,"The T_1 will be measured using delay values. \n%s\n",status_string) != ERR_OK)
+{
+        ABORT
+}
+//}}}
+//}}}
+//{{{ loop over the experiments (copied from jf_dnp
+for (j=0;j<number_experiments;j++)
+{
+	sprintf(mytext,"manual $T_{1,0}$ %d/%d",j+1,number_experiments);
+    settitle(mytext);
+    // in jf_dnp, I set the attenuation here
+    // in jf_dnp, I sleep here
+    ZG
+	XCMD("sendgui close") //since it's opening too many windows
+	eno = expno;
+	IEXPNO
+    // in jf_dnp, I set myexpno here, but I don't care about that
+	VIEWDATA_SAMEWIN//copied from iexpno
+}
+//}}}
+QUIT
+//{{{ various functions
+double round(double number)
+{
+	double remainder;
+	remainder = number - floor(number);
+	if(remainder >= (double) 0.5)
+	{
+		return floor(number) + (double) 1.0;
+	}else{
+		return floor(number);
+	}
+	return number;
+}
+void make_vdlistlog(char *string,double Ta,double Tb,int t1steps,float startconstant,float stopconstant,double *delaylist)
+{
+        char titlename[1000];
+        FILE *titlefp;                  /* title file pointer */
+        int j;
+        double tau,taustart,taustop;
+        double logstep,logstart,logstop,difference,loglist[256];
+        (void) sprintf( titlename,"C:/Bruker/TopSpin3.2/exp/stan/nmr/lists/vd/%s", string);
+        if ((titlefp = fopen(titlename, "wt")) == NULL)
+        {
+            Proc_err(DEF_ERR_OPT, "Can't open %s\n%s",
+                     titlename, strerror(errno));
+            return 0;
+        }
+        taustart = startconstant*Ta;
+        logstart = log((double) taustart);
+        taustop = stopconstant*Tb;
+        logstop = log((double) taustop);
+        difference = (logstop - logstart) / (double) (t1steps -1);
+        for (j=0;j<t1steps;j++)
+        {
+                logstep = logstart + difference * j;
+                //printf("trying to write %0.3f\n",tau);
+                loglist[j] = logstep;
+        }
+        for (j=0;j<t1steps;j++)
+        {
+                tau = exp((double) loglist[j]);
+                //printf("trying to write %0.3f\n",tau);
+                if(tau < 0.5)
+                {
+                        fprintf(titlefp, "%0.3fm\n", tau*1e3);
+                        delaylist[j] = tau;
+                }else{
+                        fprintf(titlefp, "%0.3f\n", tau);
+                        delaylist[j] = tau*1e3;
+                }
+        }
+        fclose (titlefp); 
+        return delaylist;
+}
+void make_plist(double lowpoweratten,double highpoweratten,int numsteps,double *attenlist)
+{
+	double maxratio,deltap,currentpower,currentatten;
+	int j;
+	maxratio = pow((double) 10,(-0.5)/10.0);
+	attenlist[numsteps-1] = highpoweratten;
+	attenlist[0] = lowpoweratten;
+	highpoweratten = pow((double) 10,-highpoweratten/10.0);
+	lowpoweratten = pow((double) 10,-lowpoweratten/10.0);
+	currentpower = highpoweratten;
+	for(j=1;j<numsteps-1;j++)
+	{
+		deltap = (currentpower - lowpoweratten)/(numsteps-j);//power range left divided into number of steps left
+		if((currentpower-deltap)/currentpower > maxratio)
+		{
+			currentpower = maxratio*currentpower;
+		}else{
+			currentpower = currentpower-deltap;
+		}
+		currentatten =  (-10.0) * log(currentpower) / log((double) 10.0);
+		currentatten = round(currentatten*(double) 2.0)/(double) 2.0;
+		currentpower = pow(10,(-1.0)*currentatten/10.0);
+		attenlist[numsteps-1-j] = currentatten;
+	}
+	return attenlist;
+}
+void make_vdlist(char *string,double Ta,double alpha,int t1steps,float startconstant,float stopconstant)
+{
+	char titlename[1000];
+	FILE *titlefp;			/* title file pointer */
+	int j;
+	double tau,taustart,taustop;
+	(void) sprintf( titlename,"%s/exp/stan/nmr/lists/vd/%s",
+			disk, string);
+	if ((titlefp = fopen(titlename, "wt")) == NULL)
+	{
+	    Proc_err(DEF_ERR_OPT, "Can't open %s\n%s",
+		     titlename, strerror(errno));
+	    return 0;
+	}
+	taustart = startconstant*Ta;
+	taustop = stopconstant*alpha*Ta;
+	for (j=0;j<t1steps;j++)
+	{
+		tau = taustart + (taustop-taustart)*j/(double)(t1steps-1);
+		//printf("trying to write %0.3f\n",tau);
+		if(tau < 0.5)
+		{
+			fprintf(titlefp, "%0.3fm\n", tau*1e3);
+		}else{
+			fprintf(titlefp, "%0.3f\n", tau);
+		}
+	}
+	fclose (titlefp); 
+}
+void settitle(char *string)/*{{{*/
+{
+        char titlename[1000];
+        FILE *titlefp;                  /* title file pointer */
+        (void) sprintf( titlename,"%s/%s/%d/pdata/%d/title",
+                        disk, name, expno, 1);
+        if ((titlefp = fopen(titlename, "wt")) == NULL)
+        {
+            Proc_err(DEF_ERR_OPT, "Can't open %s\n%s",
+                     titlename, strerror(errno));
+            return 0;
+        }
+        fprintf(titlefp, string);
+        fclose (titlefp); 
+}/*}}}*/
+#include <inc/exptUtil>/* utilities for printing and calculation of 
+		      experiment time */
+#include <unistd.h>
+#include <stdlib.h>
+#include <math.h>
+
+//}}}

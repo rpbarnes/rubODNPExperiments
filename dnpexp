@@ -1,0 +1,742 @@
+//{{{declarations
+double attenuation_setting, t1_low_power, attenuation_setting_start, attenuation_setting_stop, negativeone, high_power, low_power, redo_powers[3];
+double sfo1, freqoffby;
+float aq_len;
+char userstring[10][20];
+double userdata[20];
+char teststring[20];
+char mypasswd[20];
+double delaylist[256];
+float p1,pl1,rg,rglowp;
+void amp_on();
+void start_powermeter(),stop_powermeter(),send_socket_command();
+void amp_off();
+void make_vdlist(char *,double,double,int,float,float);
+void make_vdlistlog(char *,double,double,int,float,float,double *);
+void set_attenuation(double);
+void settitle(char *);
+void make_plist(double,double,int,double *);
+double round(double);
+double yig_frequency,attenlist[256];
+float emaxscantime,t1scantime,initialt1time;
+double tempd;
+float tempf,tempf_two,startconstant,stopconstant,t1minutes;
+int j,eno,t1type;
+int sleeptime;
+int counter;
+int fir, issigma;
+int myexpno, attenspaces;
+int t1steps,npcyc,t1sepcycle;
+int status;
+double Ta,Tb;
+char *status_string;
+char mytext[100],fileName[100];
+char commandstring[200];
+double myratio,elratio;
+//}}}
+//{{{defaults and constants
+t1sepcycle = 1;
+negativeone = (double) -1.0;
+myratio = (double) 1.516710;
+elratio = (double) 28.06174;
+npcyc = 4;
+Tb = 5;
+fir = 0;
+Ta = 0.1;
+//}}}
+//{{{ grab sfo1, and p1 from first parameters in the set, and transfer to the rest
+REXPNO(1)
+RPROCNO(1)
+SETCURDATA
+FETCHPAR("SFO1",&sfo1);
+FETCHPAR("P1",&p1);
+FETCHPAR("PLW1",&pl1); // Bruker changed what they call this. The power is also now given in watts, which is nice.
+FETCHPAR("USERA1",userstring[1]);
+yig_frequency = (double) atof(userstring[1]);
+FETCHPAR("USERA2",userstring[2]);
+myratio = (double) atof(userstring[2]);
+for(j=2;j<6;j++)
+{
+        REXPNO(j)
+        RPROCNO(1)
+        SETCURDATA
+        STOREPAR("SFO1",sfo1)
+        STOREPAR("USERA1",userstring[1])
+        STOREPAR("USERA2",userstring[2])
+	STOREPAR("P1",p1)
+	STOREPAR("PLW1",pl1)
+}
+//}}}
+//{{{ check that everything is right
+REXPNO(1)
+RPROCNO(1)
+attenuation_setting = (double) 31.5;
+set_attenuation(attenuation_setting);
+settitle("Frequency Adjustment");
+//XMAC("jf_zg")
+//CPR_exec("mc", 1);
+XCMD("zg")
+XCMD("efp")
+XCMD("mc")
+
+freqoffby = yig_frequency - (sfo1 / myratio);// the frequency we want for ESR resonance, less the frequency we would currently need for ESR resonance
+
+amp_off();
+if (Proc_err(QUESTION_OPT,"Please verify that you have run paropt and set p1 appropriately") != ERR_OK)
+{
+        ABORT
+}
+REXPNO(4)
+RPROCNO(1)
+SETCURDATA
+FETCHPAR("TD",&tempf_two);
+FETCHPAR("DW",&tempf);
+FETCHPAR("AQ",&aq_len);
+//if (Proc_err(QUESTION_OPT,"I read T1 aq to be %0.10f s",aq_len) != ERR_OK)
+if (Proc_err(QUESTION_OPT,"dw %0.9f td %0.9f aq %0.9f",tempf,tempf_two,aq_len) != ERR_OK)
+{
+        ABORT
+}
+//}}}
+//{{{ get the parameters for DNP
+REXPNO(1)
+RPROCNO(1)
+SETCURDATA
+FETCHPAR("CNST 3",&tempf);
+t1type = (int)((double)round((double)tempf));
+
+FETCHPAR("CNST 4",&tempf);
+attenuation_setting_start = (double) tempf;
+
+FETCHPAR("CNST 24",&tempf);
+t1_low_power = (double) tempf;
+
+
+FETCHPAR("CNST 5",&tempf);
+attenuation_setting_stop = (double) tempf;
+
+FETCHPAR("CNST 6",&tempf);
+attenspaces = (int) tempf;
+
+
+FETCHPAR("CNST 7",&tempf);
+sleeptime = (int) tempf;
+//}}}
+//{{{ set up the T1 parameters -- in an ideal situation, this would let us use the parameters of Weiss et. al. -- see first paper and table in second paper
+//{{{ get a bunch of t1 related parameters
+FETCHPAR("CNST 8",&tempf);
+Ta = (double) tempf;
+GETFLOAT("Enter the minimum possible T_1 value:",Ta);
+tempf = (float) Ta;
+STOREPAR("CNST 8",tempf);
+
+FETCHPAR("CNST 9",&tempf);
+Tb = (double) tempf;
+GETFLOAT("Enter the maximum possible T_1 value:",Tb);
+tempf = (float) Tb;
+STOREPAR("CNST 9",tempf);
+issigma = 0;
+GETINT("Would you like to force the repetition delay to 5x T1 Max?\nTypically this isn't necessary. \n1 - 5xT1 max, 0 - 2.3xT1 max",issigma);
+FETCHPAR("CNST 10",&t1minutes);
+GETFLOAT("Enter the length of time you want T_1 experiment to take:",t1minutes);
+STOREPAR("CNST 10",t1minutes);
+
+FETCHPAR("CNST 11",&tempf);
+npcyc = (int) tempf;
+
+FETCHPAR("CNST 13",&startconstant);
+
+FETCHPAR("CNST 14",&stopconstant);
+
+
+FETCHPAR("CNST 12",&tempf);
+t1sepcycle = (int) tempf;
+//}}}
+
+t1steps = 5; //to start with
+//make_vdlist("jf_fir_tmp",Ta,Tb/Ta,t1steps,startconstant,stopconstant);
+make_vdlistlog("jf_fir_tmp",Ta,Tb,t1steps,startconstant,stopconstant,delaylist); //Use log spacing for delay list
+REXPNO(4)
+RPROCNO(1)
+SETCURDATA
+//{{{override various T1 parameters based on the values I have chosen
+if(t1sepcycle)
+{
+    STOREPAR("PULPROG","jf_fir_ph") // hard set this
+}else{
+    STOREPAR("PULPROG","jf_fir") // hard set this
+}
+STOREPAR("VDLIST","jf_fir_tmp") // hard set this
+//STOREPAR("NS",1)// I don't want this!
+if(fir)
+{
+    STOREPAR("D 1",Tb*2.0) // optimal according to Weiss
+}else{
+    //FETCHPAR("AQ",&aq_len);
+    if(Tb*5.0>aq_len){ //don't use this --> hack it for 0.3, because it's not finding the AQ correctly
+    //if((Tb*5.0)>0.3){
+        STOREPAR("D 1",Tb*5.0) // this is for T1-IR
+    }else{
+        //STOREPAR("D 1",0.3) // this is for T1-IR
+        STOREPAR("D 1",1.01*aq_len) // this is for T1-IR
+    }
+
+}
+if(t1sepcycle)
+{
+    STOREPAR1("TD",t1steps*npcyc)
+    STOREPAR("L 22",t1steps)
+    STOREPAR("L 21",npcyc)
+}else{
+    STOREPAR1("TD",t1steps)
+    STOREPAR("NS",npcyc)
+}
+//}}}
+//{{{ calculate the T1 scan time
+REXPNO(4)
+RPROCNO(1)
+SETCURDATA
+initialt1time = (float) CalcExpTime();
+//{{{ change t1steps so we get the length of time we want
+t1steps = (int) (t1minutes * 60.0 * 5.0 / initialt1time);
+make_vdlistlog("jf_fir_tmp",Ta,Tb,t1steps,startconstant,stopconstant,delaylist); //Use log spacing for delay list
+//make_vdlist("jf_fir_tmp",Ta,Tb/Ta,t1steps,startconstant,stopconstant);
+if(t1sepcycle)
+{
+    STOREPAR1("TD",t1steps*npcyc)
+    STOREPAR("L 22",t1steps)
+    STOREPAR("L 21",npcyc)
+}else{
+    STOREPAR1("TD",t1steps)
+    STOREPAR("NS",npcyc)
+}
+initialt1time = (float) CalcExpTime();
+//}}}
+t1scantime = initialt1time;
+t1scantime *= (float) (t1type+1);
+//if(t1type == 4)
+//{
+//        t1scantime *= (float) (attenspaces+3); // then it's a full series
+//}else if(t1type > 4){
+//        t1scantime *= (float) (t1type+2+3); // then it's the number of scans
+//}else{
+//        t1scantime *= (float) (t1type+2); // then it gives the number of scans (not including the two initial ones)
+//}
+//}}}
+
+REXPNO(5)
+RPROCNO(1)
+SETCURDATA
+if(issigma == 0)
+{
+    STOREPAR("D 1",Tb*5.0) // set Tb to 5 * max possible T1
+}
+// note that this is the last parameter that could change the scan time
+//}}}
+//{{{ calculate and print attenuation settings
+//{{{ decide which is high and low power
+if (attenuation_setting_stop<attenuation_setting_start)
+{
+        high_power = attenuation_setting_stop;
+        low_power = attenuation_setting_start;
+}else{
+        low_power = attenuation_setting_stop;
+        high_power = attenuation_setting_start;
+}
+if(t1_low_power == 1.0)
+{
+        t1_low_power = low_power;
+}
+if((t1_low_power > 0.99) && (t1_low_power < 1.01))//in case there is some type of rounding error
+{
+        t1_low_power = low_power;
+}
+//}}}
+make_plist(low_power,high_power,attenspaces,attenlist);
+//}}}
+//{{{ calc and print Emax curve time
+//{{{ calculate the scan time
+REXPNO(5)
+SETCURDATA
+emaxscantime = (float) (CalcExpTime()+(int) sleeptime);
+emaxscantime *= (float) (attenspaces+3);
+//}}}
+//}}}
+//{{{ print the time first, in case I want to change it
+if(Proc_err(QUESTION_OPT,"The baseline T_1 experiment will take %0.1f min and will consist of %d points",initialt1time/60.0,t1steps) != ERR_OK)
+{
+        ABORT
+}
+status_string = calloc(500,sizeof(char));
+for(j=0;j<t1steps;j++)
+{
+        sprintf(status_string,"%s %0.4f",status_string,delaylist[j]); // this is a fancy way to do append
+}
+
+if(Proc_err(QUESTION_OPT,"The T_1 will be measured using delay values. \n%s\n",status_string) != ERR_OK)
+{
+        ABORT
+}
+status_string = calloc(500,sizeof(char));
+sprintf(status_string,"attenspaces (%d):",attenspaces);
+for(j=0;j<attenspaces;j++)
+{
+        sprintf(status_string,"%s %0.1f",status_string,attenlist[j]);
+}
+sprintf(status_string,"%s\n t1type = %d",status_string,t1type);
+if (Proc_err(QUESTION_OPT,"I am going to take power steps:\n%s\nthis is going to take %0.1f min\nfor a total of %0.1f min",status_string,emaxscantime/60.0,(emaxscantime+t1scantime+(float)(75*sleeptime))/60.0) != ERR_OK)//75*sleeptime is the amp warmup
+{
+        ABORT
+}
+free(status_string);
+//}}}
+//{{{ first, rga with the power off
+REXPNO(5)
+STOREPAR("RG",(double) 100.0)
+//RGA
+FETCHPAR("RG",&rglowp);
+//}}}
+//{{{ now, turn on amp and set RG for the dnp scans
+REXPNO(5) //forgot this before!!
+attenuation_setting = (double) 31.5;
+set_attenuation(attenuation_setting);
+amp_on();
+//if (Proc_err(QUESTION_OPT,"Turn on the amplifier") != ERR_OK)
+//{
+//      ABORT
+//}
+set_attenuation(high_power+3);// let it warm up, so it doesn't blow out the sample
+sleep((unsigned int) sleeptime);
+set_attenuation(high_power);
+STOREPAR("RG",(double) 20.0)
+//RGA
+FETCHPAR("RG",&rg);
+//{{moved this all to here, in case I want to change RG
+//{{{grab noise with amplifier on
+REXPNO(3)
+WRA(503)
+REXPNO(503)
+ZG
+//}}}
+attenuation_setting = (double) 60.0;
+set_attenuation(attenuation_setting);
+amp_off();
+//if (Proc_err(QUESTION_OPT,"Turn off the amplifier") != ERR_OK)
+//{
+//      ABORT
+//}
+//}}
+if(rg>rglowp) // in case we're getting closer to zero
+{
+    rg = rglowp;
+}
+for(j=4;j<6;j++) // 4+5 are t1 and DNP
+{
+        REXPNO(j)
+        STOREPAR("RG",rg)
+        //STOREPAR("RG",(float) 512)
+}
+//}}}
+//{{{ Run ALL the baseline scans
+for(j=2;j<6;j++)
+{
+    if(j!=4) // we no longer run the T1 scan here, because we've turned on the amp, and don't want to heat it
+    {
+        REXPNO(j)
+        SETCURDATA
+        ZG // leave windows open
+    }
+}
+//}}}
+//{{{warm up the amp
+amp_on();
+attenuation_setting = low_power;
+set_attenuation(31.5);
+start_powermeter("power");
+for(j=0;j<27;j++) // since the wait time is typically 11s, this means sleep for about 5min with the amp on, to let it warm up
+{
+        sleep((unsigned int) sleeptime);
+}
+//}}}
+//{{{ run the actual DNP loop, recalculating the attenuations as we go
+REXPNO(5);
+IEXPNO
+myexpno = 6;
+//GETCURDATA // this gets the FOREGROUND dataset
+SETCURDATA // this seems to pull the INFORMATION for a particular dataset
+
+for (j=0;j<attenspaces;j++)
+{
+        sprintf(mytext,"DNP, set %0.1f",attenlist[j]);
+        settitle(mytext);
+
+        //now set the attenuation
+        set_attenuation(attenlist[j]);
+
+        //zg
+        sleep((unsigned int) sleeptime);
+        ZG
+        XCMD("sendgui close") //since it's opening too many windows
+
+        //iexpno
+        eno = expno;
+        // the following two should be the same thing as IEXPNO, but I'm not sure
+        IEXPNO
+        myexpno++;
+        VIEWDATA_SAMEWIN//copied from iexpno
+}
+redo_powers[0] = high_power + (double) 12.0;
+redo_powers[1] = high_power + (double) 6.0;
+redo_powers[2] = high_power + (double) 3.0;
+for (j=2;j>-1;j--) // this loop will redo some lower powers, to check for sample loss
+{
+        attenuation_setting = redo_powers[j];
+        sprintf(mytext,"DNP, set %0.1f",attenuation_setting);
+        settitle(mytext);
+
+        //now set the attenuation
+        set_attenuation(attenuation_setting);
+
+        //zg
+        sleep((unsigned int) sleeptime);
+        ZG
+        XCMD("sendgui close") //since it's opening too many windows
+
+        eno = expno;
+        IEXPNO
+        myexpno++;
+        VIEWDATA_SAMEWIN//copied from iexpno
+}
+//}}}
+//{{{ run a T_1 with power off (exp 304)
+amp_off();
+for(j=0;j<6;j++) // wait just about a minute for the sample to cool down
+{
+        sleep((unsigned int) sleeptime);
+}
+stop_powermeter();
+REXPNO(4) // why doesn't this throw and error?
+WRA(304)
+REXPNO(304)
+settitle("T1 with microwaves off");
+STOREPAR("RG",rglowp)
+//STOREPAR("RG",(float) 512)
+ZG
+//}}}
+//{{{ start the amp and warm it up again
+amp_on();
+attenuation_setting = (double) 31.5;
+set_attenuation(attenuation_setting);
+start_powermeter("t1_powers"); // restart the power meter for the t1's
+for(j=0;j<13;j++) // since the wait time is typically 11s, this means sleep for about 2.5min with the amp on, to let it warm up
+{
+        sleep((unsigned int) sleeptime);
+}
+//}}}
+//myexpno now stores the number of the last experiment run
+//{{{ Run the T1 power curves
+if(t1type>0)
+{
+        // here is what t1type means:///////////////////////////
+        // 0) No T1
+        // 1) Only with no power.
+        // 2) No power and full power.
+        // 3) No power, half power, and full power.
+        // 4) Full set other) number given + an initial high, medium, off (like option 2)
+        ////////////////////////////////////////////////////////
+        //{{{ generate the list of powers to loop over
+        make_plist(t1_low_power,high_power,t1type,attenlist);
+        attenspaces = t1type;
+        //if(t1type > 4)
+        //{
+        //        make_plist(t1_low_power,high_power,t1type,attenlist);
+        //        attenspaces = t1type;
+        //}
+        //if(t1type == 4)
+        //{
+        //        make_plist(t1_low_power,high_power,attenspaces,attenlist);
+        //        attenspaces = t1type;
+        //}
+        //}}}
+        REXPNO(4);
+        // set so the first run does WRA / REXPNO and the subsequent do IEXPNO
+        WRA(myexpno+1);
+        REXPNO(myexpno+1);
+        //if(t1type>2)
+        //{
+        //        set_attenuation(high_power+(double) 3.0);
+        //        sprintf(mytext,"$T_1$ @ %0.1f $dB$ atten. (t1type=%d)",high_power+(double) 3.0,t1type);
+        //        settitle(mytext);
+        //        ZG
+        //        IEXPNO;
+        //        VIEWDATA_SAMEWIN//copied from iexpno
+        //        myexpno++;
+        //}
+        //if(t1type>1)
+        //{
+        //        set_attenuation(high_power);
+        //        ZG
+        //        sprintf(mytext,"$T_1$ @ %0.1f $dB$ atten. (t1type=%d)",high_power,t1type);
+        //        settitle(mytext);
+        //        IEXPNO;
+        //        VIEWDATA_SAMEWIN//copied from iexpno
+        //        myexpno++;
+        //}
+        //if(t1type > 3)
+        //{
+        //{{{ run a T1 series loop, recalculating the attenuations as we go
+        for (j=0;j<attenspaces;j++)
+        {
+                set_attenuation(attenlist[j]);
+                sleep((unsigned int) sleeptime);// need to sleep to allow temperature/amplifier to equilibrate
+                ZG
+                sprintf(mytext,"T1 series, set %0.1f",attenlist[j]);
+                settitle(mytext);
+                //IEXPNO//removed this, because it was creating problems
+                IEXPNO;
+                VIEWDATA_SAMEWIN//copied from iexpno
+                //XCMD("sendgui close") //since it's opening too many windows
+                myexpno++;
+        }
+        // You should add this in as an option to jf_dnp to redo some power steps down.
+        //for (j=2;j>-1;j--) // this loop will redo some lower powers, to check for sample loss
+        //{
+        //    set_attenuation(attenlist[j]);
+        //    sleep((unsigned int) sleeptime);// need to sleep to allow temperature/amplifier to equilibrate
+        //    ZG
+        //    sprintf(mytext,"T1 series, set %0.1f",attenlist[j]);
+        //    settitle(mytext);
+        //    //IEXPNO//removed this, because it was creating problems
+        //    IEXPNO;
+        //    VIEWDATA_SAMEWIN//copied from iexpno
+        //    //XCMD("sendgui close") //since it's opening too many windows
+        //    myexpno++;
+        //}
+        //}}}
+        //}
+}
+//}}}
+attenuation_setting = (double) 31.5;
+set_attenuation(attenuation_setting);
+amp_off();
+//{{{ jump back to the thermal experiment, and reacquire signal to check for sample loss
+REXPNO(5)
+RPROCNO(1)
+SETCURDATA
+WRA(700);//check for sample loss at the end
+REXPNO(700);
+IEXPNO;
+//}}}
+ZG
+stop_powermeter();
+QUIT
+//{{{ various functions
+double round(double number)/*{{{*/
+{
+        double remainder;
+        remainder = number - floor(number);
+        if(remainder >= (double) 0.5)
+        {
+                return floor(number) + (double) 1.0;
+        }else{
+                return floor(number);
+        }
+        return number;
+}/*}}}*/
+void make_vdlistlog(char *string,double Ta,double Tb,int t1steps,float startconstant,float stopconstant,double *delaylist)/*{{{*/
+{
+        char titlename[1000];
+        FILE *titlefp;                  /* title file pointer */
+        int j;
+        double tau,taustart,taustop;
+        double logstep,logstart,logstop,difference,loglist[256];
+        (void) sprintf( titlename,"C:/Bruker/TopSpin3.2/exp/stan/nmr/lists/vd/%s", string);
+        if ((titlefp = fopen(titlename, "wt")) == NULL)
+        {
+            Proc_err(DEF_ERR_OPT, "Can't open %s\n%s",
+                     titlename, strerror(errno));
+            return 0;
+        }
+        taustart = startconstant*Ta;
+        logstart = log((double) taustart);
+        taustop = stopconstant*Tb;
+        logstop = log((double) taustop);
+        difference = (logstop - logstart) / (double) (t1steps -1);
+        for (j=0;j<t1steps;j++)
+        {
+                logstep = logstart + difference * j;
+                //printf("trying to write %0.3f\n",tau);
+                loglist[j] = logstep;
+        }
+        for (j=0;j<t1steps;j++)
+        {
+                tau = exp((double) loglist[j]);
+                //printf("trying to write %0.3f\n",tau);
+                if(tau < 0.5)
+                {
+                        fprintf(titlefp, "%0.3fm\n", tau*1e3);
+                        delaylist[j] = tau;
+                }else{
+                        fprintf(titlefp, "%0.3f\n", tau);
+                        delaylist[j] = tau*1e3;
+                }
+        }
+        fclose (titlefp); 
+        return delaylist;
+}/*}}}*/
+void make_plist(double lowpoweratten,double highpoweratten,int numsteps,double *attenlist)/*{{{*/
+{
+        double maxratio,deltap,currentpower,currentatten;
+        int j;
+        maxratio = pow((double) 10,(-0.5)/10.0);
+        attenlist[numsteps-1] = highpoweratten;
+        attenlist[0] = lowpoweratten;
+        highpoweratten = pow((double) 10,-highpoweratten/10.0);
+        lowpoweratten = pow((double) 10,-lowpoweratten/10.0);
+        currentpower = highpoweratten;
+        for(j=1;j<numsteps-1;j++)
+        {
+                deltap = (currentpower - lowpoweratten)/(numsteps-j);//power range left divided into number of steps left
+                if((currentpower-deltap)/currentpower > maxratio)
+                {
+                        currentpower = maxratio*currentpower;
+                }else{
+                        currentpower = currentpower-deltap;
+                }
+                currentatten =  (-10.0) * log(currentpower) / log((double) 10.0);
+                currentatten = round(currentatten*(double) 2.0)/(double) 2.0;
+                currentpower = pow(10,(-1.0)*currentatten/10.0);
+                attenlist[numsteps-1-j] = currentatten;
+        }
+        return attenlist;
+}/*}}}*/
+void make_vdlist(char *string,double Ta,double alpha,int t1steps,float startconstant,float stopconstant)/*{{{*/
+{
+        char titlename[1000];
+        FILE *titlefp;                  /* title file pointer */
+        int j;
+        double tau,taustart,taustop;
+        (void) sprintf( titlename,"%s/exp/stan/nmr/lists/vd/%s",
+                        disk, string);
+        if ((titlefp = fopen(titlename, "wt")) == NULL)
+        {
+            Proc_err(DEF_ERR_OPT, "Can't open %s\n%s",
+                     titlename, strerror(errno));
+            return 0;
+        }
+        taustart = startconstant*Ta;
+        taustop = stopconstant*alpha*Ta;
+        for (j=0;j<t1steps;j++)
+        {
+                tau = taustart + (taustop-taustart)*j/(double)(t1steps-1);
+                //printf("trying to write %0.3f\n",tau);
+                if(tau < 0.5)
+                {
+                        fprintf(titlefp, "%0.3fm\n", tau*1e3);
+                }else{
+                        fprintf(titlefp, "%0.3f\n", tau);
+                }
+        }
+        fclose (titlefp); 
+}/*}}}*/
+void settitle(char *string)/*{{{*/
+{
+        char titlename[1000];
+        FILE *titlefp;                  /* title file pointer */
+        (void) sprintf( titlename,"%s/%s/%d/pdata/%d/title",
+                        disk, name, expno, 1);
+        if ((titlefp = fopen(titlename, "wt")) == NULL)
+        {
+            Proc_err(DEF_ERR_OPT, "Can't open %s\n%s",
+                     titlename, strerror(errno));
+            return 0;
+        }
+        fprintf(titlefp, string);
+        fclose (titlefp); 
+}/*}}}*/
+/*{{{*/ // Headers
+#include <inc/exptUtil>/* utilities for printing and calculation of 
+                      experiment time */
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <shellapi.h>
+#include <math.h>/*}}}*/
+void set_attenuation(double attenuation_setting)/*{{{*/
+{
+	char commandstring[200];
+	// Note you're passing this a double but it takes it expecting a float and still works...
+	(void) sprintf(commandstring,"SETATTEN %0.2f",attenuation_setting);
+	send_socket_command(commandstring);
+}/*}}}*/
+void amp_on()/*{{{*/
+{
+	char commandstring[200];
+	(void) sprintf(commandstring,"AMPON");
+	send_socket_command(commandstring);
+}/*}}}*/
+void amp_off()/*{{{*/
+{
+	char commandstring[200];
+	(void) sprintf(commandstring,"AMPOFF");
+	send_socket_command(commandstring);
+}/*}}}*/
+void start_powermeter(char *string)/*{{{*/
+{
+	char commandstring[200];
+	(void) sprintf(commandstring,"LOGPOWER %s/%s/%s",disk,name,string);
+	send_socket_command(commandstring);
+}/*}}}*/
+void stop_powermeter()/*{{{*/
+{
+	char commandstring[200];
+	(void) sprintf(commandstring,"POWERSTOP");
+	send_socket_command(commandstring);
+}/*}}}*/
+/*{{{*/// Send Socket Command function
+#define SERV_HOST_ADDR  2130706433       /* host addr=127.0.0.1 for server */
+void send_socket_command(char *command_string) {
+    char text[128];
+    int err;
+    int sock;
+    int port = 7000;
+    time_t tloc,EndTime;
+
+    static char data[1000];
+    static char crlf[2]= { "\r\n" };
+    struct sockaddr_in server;
+    /* struct hostent *hp, *gethostbyname(); */
+
+#ifdef HAS_WINDOWS_FEATURES
+    WORD wVersionRequested;
+    WSADATA wsaData;
+    wVersionRequested=MAKEWORD(2,0);
+    err=WSAStartup(wVersionRequested,&wsaData);
+#endif
+
+    (void) strcpy(data,command_string);
+    (void) strcat(data,"\n");
+    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock < 0 ) {
+        Proc_err(DEF_ERR_OPT,"can't open socket\n");
+        STOP
+    }else{
+        server.sin_addr.s_addr = htonl(SERV_HOST_ADDR);   /* 127.0.0.1 */
+        server.sin_family = AF_INET;
+        server.sin_port = htons(port);
+        if (connect(sock,&server,sizeof(server))<0) {
+            Proc_err(DEF_ERR_OPT,"Can't connect to server!\n%s\n",strerror(errno));
+        }
+        if (send(sock,data,strlen(data),0)<0) {
+            Proc_err(DEF_ERR_OPT,"Can't send to server!\n%s\n",strerror(errno));
+        }
+#ifdef HAS_WINDOWS_FEATURES
+        closesocket(sock);
+#else
+        close(sock);
+#endif
+    }
+    return;
+}/*}}}*/
+//}}}
+

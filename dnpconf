@@ -1,0 +1,131 @@
+//{{{declarations
+double attenuation_setting, attenuation_setting_start, attenuation_setting_stop, negativeone, high_power, low_power, redo_powers[3];
+double sfo1, freqoffby;
+char userstring[10][20];
+double userdata[20];
+char teststring[20];
+float p1,rg,rglowp;
+double round(double);
+double yig_frequency,attenlist[256];
+float emaxscantime,t1scantime,initialt1time;
+double tempd;
+float tempf,startconstant,stopconstant;
+int j,eno,t1type;
+int sleeptime;
+int counter;
+int fir;
+int myexpno, attenspaces;
+int t1steps,npcyc,t1sepcycle;
+double Ta,Tb;
+char *status_string;
+char mytext[100];
+double myratio,elratio;
+//}}}
+//{{{defaults and constants
+t1sepcycle = 1;
+negativeone = (double) -1.0;
+myratio = (double) 1.516710;
+elratio = (double) 28.06174;
+t1steps = 16;
+npcyc = 4;
+Tb = 5;
+fir = 0;
+Ta = 0.1;
+//}}}
+//{{{ grab sfo1, and p1 from first parameters in the set, and transfer to the rest
+REXPNO(1)
+SETCURDATA
+FETCHPAR("USERA1",userstring[1]);
+yig_frequency = (double) atof(userstring[1]);
+FETCHPAR("USERA2",userstring[2]);
+myratio = (double) atof(userstring[2]);
+//}}}
+//{{{ get the parameters for DNP
+REXPNO(1)
+SETCURDATA
+FETCHPAR("CNST 3",&tempf);
+t1type = (int)((double)round((double)tempf));
+GETINT("Enter a number corresponding to how many T1's you would like:\n 0) No T1\n 1) Only with no power.\n 2) No power and high power.\n 3) No power, half power, and full power.\n 4) Full set other) number given + an initial high, medium, off (like option 2).",t1type);
+tempf = (double) t1type;
+STOREPAR("CNST 3",tempf);
+
+FETCHPAR("CNST 4",&tempf);
+attenuation_setting_start = (double) tempf;
+GETFLOAT("Please enter the starting attenuation setting:",attenuation_setting_start);
+tempf = (float) attenuation_setting_start;
+STOREPAR("CNST 4",tempf);
+
+FETCHPAR("CNST 24",&tempf);
+attenuation_setting_start = (double) tempf;
+GETFLOAT("Starting attenuation setting for T1 (1 if the same as previous):",attenuation_setting_start);
+tempf = (float) attenuation_setting_start;
+STOREPAR("CNST 24",tempf);
+
+FETCHPAR("CNST 5",&tempf);
+attenuation_setting_stop = (double) tempf;
+GETFLOAT("Please enter the final attenuation setting:",attenuation_setting_stop);
+tempf = (float) attenuation_setting_stop;
+STOREPAR("CNST 5",tempf);
+
+FETCHPAR("CNST 6",&tempf);
+attenspaces = (int) tempf;
+GETINT("Enter the number of attenuation steps desired:",attenspaces);
+tempf = (float) attenspaces;
+STOREPAR("CNST 6",tempf);
+
+FETCHPAR("CNST 7",&tempf);
+sleeptime = (int) tempf;
+GETINT("Please enter the wait time:",sleeptime);
+tempf = (float) sleeptime;
+STOREPAR("CNST 7",tempf);
+//}}}
+//{{{ set up the T1 parameters -- in an ideal situation, this would let us use the parameters of Weiss et. al. -- see first paper and table in second paper
+//{{{ get a bunch of t1 related parameters
+
+FETCHPAR("CNST 11",&tempf);
+npcyc = (int) tempf;
+GETINT("Phase cycle (4,8,16) or not (1)?:",npcyc);
+tempf = (float) npcyc;
+STOREPAR("CNST 11",tempf);
+
+FETCHPAR("CNST 13",&startconstant);
+GETFLOAT("Fraction of smaller T1 value to start vdlist at (0.15 recommended)",startconstant);
+STOREPAR("CNST 13",startconstant);
+
+FETCHPAR("CNST 14",&stopconstant);
+GETFLOAT("Fraction of larger T1 value to stop vdlist at (0.75 recommended)",stopconstant);
+STOREPAR("CNST 14",stopconstant);
+
+
+FETCHPAR("CNST 12",&tempf);
+t1sepcycle = (int) tempf;
+if(npcyc > 1)
+{
+    GETINT("Save T_1 phase cycles separately? (1 for yes, 0 for no)",t1sepcycle);
+}else{
+    t1sepcycle = 0;
+}
+tempf = (float) t1sepcycle;
+STOREPAR("CNST 12",tempf);
+//}}}
+
+QUIT
+//{{{ various functions
+double round(double number)
+{
+	double remainder;
+	remainder = number - floor(number);
+	if(remainder >= (double) 0.5)
+	{
+		return floor(number) + (double) 1.0;
+	}else{
+		return floor(number);
+	}
+	return number;
+}
+#include <inc/exptUtil>/* utilities for printing and calculation of 
+		      experiment time */
+#include <unistd.h>
+#include <stdlib.h>
+
+//}}}
