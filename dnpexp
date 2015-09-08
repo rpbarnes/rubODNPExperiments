@@ -385,9 +385,9 @@ for (j=0;j<attenspaces;j++)
         myexpno++;
         VIEWDATA_SAMEWIN//copied from iexpno
 }
-redo_powers[0] = high_power + (double) 12.0;
-redo_powers[1] = high_power + (double) 6.0;
-redo_powers[2] = high_power + (double) 3.0;
+redo_powers[0] = high_power + (double) 6.0;
+redo_powers[1] = high_power + (double) 4.0;
+redo_powers[2] = high_power + (double) 2.0;
 for (j=2;j>-1;j--) // this loop will redo some lower powers, to check for sample loss
 {
         attenuation_setting = redo_powers[j];
